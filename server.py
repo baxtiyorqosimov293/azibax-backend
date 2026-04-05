@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta, timezone
 import os
+from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Depends
+import requests
+from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from jose import jwt, JWTError
@@ -13,6 +15,9 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./azibax.db")
 SECRET_KEY = os.getenv("SECRET_KEY", "change_me_please_123456789")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))
+
+OPENLIBRARY_SEARCH = "https://openlibrary.org/search.json"
+COVERS_BASE = "https://covers.openlibrary.org/b/id"
 
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
@@ -33,32 +38,29 @@ class User(Base):
     favorites = relationship("Favorite", back_populates="user", cascade="all, delete-orphan")
 
 
-class Book(Base):
-    __tablename__ = "books"
-    id = Column(Integer, primary_key=True, index=True)
-    gutenberg_id = Column(String(50), unique=True, nullable=True, index=True)
-    title = Column(String(500), nullable=False, index=True)
-    author = Column(String(255), nullable=False, index=True)
-    genre = Column(String(100), nullable=False, index=True)
-    description = Column(Text, nullable=True)
-    file_path = Column(String(1000), nullable=True)
-    favorites = relationship("Favorite", back_populates="book", cascade="all, delete-orphan")
-
-
-class Favorite(Base):
-    __tablename__ = "favorites"
-    __table_args__ = (UniqueConstraint("user_id", "book_id", name="uq_user_book_favorite"),)
+class FavoriteBook(Base):
+    __tablename__ = "favorite_books"
+    __table_args__ = (UniqueConstraint("user_id", "book_key", name="uq_user_book_key"),)
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    book_id = Column(Integer, ForeignKey("books.id"), nullable=False)
+    book_key = Column(String(255), nullable=False)
+    title = Column(String(500), nullable=False)
+    author = Column(String(255), nullable=True)
+    genre = Column(String(100), nullable=True)
+    description = Column(Text, nullable=True)
+    cover_url = Column(String(1000), nullable=True)
+    openlibrary_url = Column(String(1000), nullable=True)
+
     user = relationship("User", back_populates="favorites")
-    book = relationship("Book", back_populates="favorites")
+
+
+User.favorites = relationship("FavoriteBook", back_populates="user", cascade="all, delete-orphan")
 
 
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
-    full_name: str | None = None
+    full_name: Optional[str] = None
 
 
 class LoginInput(BaseModel):
@@ -72,21 +74,25 @@ class TokenOut(BaseModel):
 
 
 class BookOut(BaseModel):
-    id: int
-    gutenberg_id: str | None = None
+    id: str
     title: str
-    author: str
-    genre: str
-    description: str | None = None
-    file_path: str | None = None
+    author: Optional[str] = None
+    genre: Optional[str] = None
+    description: Optional[str] = None
+    language: Optional[str] = None
+    cover: Optional[str] = None
+    openlibrary_url: Optional[str] = None
 
-    class Config:
-        from_attributes = True
 
-
-class FavoriteBookOut(BaseModel):
+class FavoriteOut(BaseModel):
     id: int
-    book: BookOut
+    book_key: str
+    title: str
+    author: Optional[str] = None
+    genre: Optional[str] = None
+    description: Optional[str] = None
+    cover_url: Optional[str] = None
+    openlibrary_url: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -128,9 +134,63 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     return user
 
 
+def map_language(code: Optional[str]) -> str:
+    mapping = {
+        "eng": "English",
+        "rus": "Русский",
+        "uzb": "O'zbek",
+    }
+    return mapping.get(code or "", code or "Unknown")
+
+
+def build_cover_url(cover_id: Optional[int]) -> Optional[str]:
+    if not cover_id:
+        return None
+    return f"{COVERS_BASE}/{cover_id}-L.jpg"
+
+
+def normalize_doc(doc: dict) -> dict:
+    author = None
+    if doc.get("author_name"):
+        author = doc["author_name"][0]
+
+    subjects = doc.get("subject") or []
+    genre = subjects[0] if subjects else None
+
+    language = None
+    if doc.get("language"):
+        language = map_language(doc["language"][0])
+
+    key = doc.get("key", "")
+    openlibrary_url = f"https://openlibrary.org{key}" if key else None
+
+    return {
+        "id": key or str(doc.get("cover_i") or doc.get("edition_key", [""])[0]),
+        "title": doc.get("title") or "Untitled",
+        "author": author,
+        "genre": genre,
+        "description": f"{doc.get('title', 'Untitled')} — {author or 'Unknown author'}",
+        "language": language,
+        "cover": build_cover_url(doc.get("cover_i")),
+        "openlibrary_url": openlibrary_url,
+    }
+
+
+def search_openlibrary(q: str, language: Optional[str] = None, limit: int = 20):
+    params = {"q": q, "limit": limit}
+    if language:
+        params["language"] = language
+
+    response = requests.get(OPENLIBRARY_SEARCH, params=params, timeout=20)
+    response.raise_for_status()
+    data = response.json()
+    docs = data.get("docs", [])
+    return [normalize_doc(doc) for doc in docs]
+
+
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="AziBax Quick API", version="1.0.0")
+app = FastAPI(title="AziBax API", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -139,41 +199,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DEMO_BOOKS = [
-    {
-        "gutenberg_id": "1661",
-        "title": "Sherlock Holmes",
-        "author": "Arthur Conan Doyle",
-        "genre": "detective",
-        "description": "Классический детектив о Шерлоке Холмсе."
-    },
-    {
-        "gutenberg_id": "2680",
-        "title": "Meditations",
-        "author": "Marcus Aurelius",
-        "genre": "self_development",
-        "description": "Философия стоицизма и личной дисциплины."
-    },
-    {
-        "gutenberg_id": "2542",
-        "title": "A Doll's House",
-        "author": "Henrik Ibsen",
-        "genre": "drama",
-        "description": "Одна из самых известных драм мировой литературы."
-    },
-    {
-        "gutenberg_id": "66048",
-        "title": "The Interpretation of Dreams",
-        "author": "Sigmund Freud",
-        "genre": "psychology",
-        "description": "Классический труд по психоанализу."
-    }
-]
-
 
 @app.get("/")
 def root():
-    return {"name": "AziBax Quick API", "status": "ok", "docs": "/docs"}
+    return {"name": "AziBax API", "status": "ok", "docs": "/docs"}
 
 
 @app.post("/auth/register")
@@ -203,63 +232,74 @@ def login(data: LoginInput, db: Session = Depends(get_db)):
 
 
 @app.get("/books", response_model=list[BookOut])
-def list_books(db: Session = Depends(get_db)):
-    books = db.query(Book).order_by(Book.id.desc()).all()
-    if books:
-        return books
-
-    for item in DEMO_BOOKS:
-        db.add(Book(**item))
-    db.commit()
-
-    return db.query(Book).order_by(Book.id.desc()).all()
+def get_books(
+    q: str = Query("popular fiction", description="Search query"),
+    language: Optional[str] = Query(None, description="eng, rus, uzb"),
+    limit: int = Query(20, ge=1, le=50),
+):
+    return search_openlibrary(q=q, language=language, limit=limit)
 
 
 @app.get("/books/search", response_model=list[BookOut])
-def search_books(q: str, db: Session = Depends(get_db)):
-    q = q.strip().lower()
-    books = db.query(Book).all()
-    return [b for b in books if q in b.title.lower() or q in b.author.lower()]
+def search_books(
+    q: str,
+    language: Optional[str] = Query(None, description="eng, rus, uzb"),
+    limit: int = Query(20, ge=1, le=50),
+):
+    return search_openlibrary(q=q, language=language, limit=limit)
 
 
-@app.get("/books/{book_id}", response_model=BookOut)
-def get_book(book_id: int, db: Session = Depends(get_db)):
-    book = db.query(Book).filter(Book.id == book_id).first()
-    if not book:
-        raise HTTPException(status_code=404, detail="Book not found")
-    return book
+@app.get("/books/{book_id}")
+def get_book(book_id: str):
+    # Упрощенно: фронт и так получает всё из /books; для страницы можно передавать данные из списка
+    raise HTTPException(status_code=404, detail="Use /books or /books/search for catalog results")
 
 
-@app.get("/favorites", response_model=list[FavoriteBookOut])
+@app.get("/favorites", response_model=list[FavoriteOut])
 def list_favorites(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return db.query(Favorite).filter(Favorite.user_id == current_user.id).all()
+    return db.query(FavoriteBook).filter(FavoriteBook.user_id == current_user.id).all()
 
 
 @app.post("/favorites/{book_id}")
-def add_favorite(book_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    book = db.query(Book).filter(Book.id == book_id).first()
-    if not book:
-        raise HTTPException(status_code=404, detail="Book not found")
-
-    existing = db.query(Favorite).filter(
-        Favorite.user_id == current_user.id,
-        Favorite.book_id == book_id
+def add_favorite(
+    book_id: str,
+    title: str,
+    author: Optional[str] = None,
+    genre: Optional[str] = None,
+    description: Optional[str] = None,
+    cover_url: Optional[str] = None,
+    openlibrary_url: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    existing = db.query(FavoriteBook).filter(
+        FavoriteBook.user_id == current_user.id,
+        FavoriteBook.book_key == book_id
     ).first()
 
     if existing:
         return {"message": "Already in favorites"}
 
-    fav = Favorite(user_id=current_user.id, book_id=book_id)
+    fav = FavoriteBook(
+        user_id=current_user.id,
+        book_key=book_id,
+        title=title,
+        author=author,
+        genre=genre,
+        description=description,
+        cover_url=cover_url,
+        openlibrary_url=openlibrary_url,
+    )
     db.add(fav)
     db.commit()
     return {"message": "Added to favorites"}
 
 
 @app.delete("/favorites/{book_id}")
-def remove_favorite(book_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    fav = db.query(Favorite).filter(
-        Favorite.user_id == current_user.id,
-        Favorite.book_id == book_id
+def remove_favorite(book_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    fav = db.query(FavoriteBook).filter(
+        FavoriteBook.user_id == current_user.id,
+        FavoriteBook.book_key == book_id
     ).first()
 
     if not fav:
