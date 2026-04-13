@@ -1,66 +1,106 @@
-const readerBookTitle = document.getElementById("readerBookTitle");
-const readerBookAuthor = document.getElementById("readerBookAuthor");
-const readerText = document.getElementById("readerText");
-const readerStatus = document.getElementById("readerStatus");
-const fontMinusBtn = document.getElementById("fontMinusBtn");
-const fontPlusBtn = document.getElementById("fontPlusBtn");
+from typing import Optional
+from fastapi import APIRouter, Query
 
-let currentFontSize = Number(localStorage.getItem("azibax_reader_font") || 20);
+router = APIRouter(prefix="/books", tags=["books"])
 
-function getParams() {
-  const params = new URLSearchParams(window.location.search);
-  return {
-    id: params.get("id") || "",
-    title: params.get("title") || "Без названия",
-    author: params.get("author") || "Неизвестный автор",
-  };
-}
+# Пока оставляем демо-тексты.
+# Позже сюда подключим реальные txt/epub файлы.
+DEMO_TEXT = """
+Глава 1
 
-function applyFontSize() {
-  if (readerText) {
-    readerText.style.fontSize = `${currentFontSize}px`;
-  }
-  localStorage.setItem("azibax_reader_font", String(currentFontSize));
-}
+Это первая версия встроенного reader для AziBax.
 
-fontMinusBtn?.addEventListener("click", () => {
-  currentFontSize = Math.max(16, currentFontSize - 1);
-  applyFontSize();
-});
+Теперь книга открывается прямо внутри сайта,
+а читатель не уходит на другие платформы.
 
-fontPlusBtn?.addEventListener("click", () => {
-  currentFontSize = Math.min(30, currentFontSize + 1);
-  applyFontSize();
-});
+Следующим этапом мы подключим реальные книги
+из твоей собственной библиотеки.
+""".strip()
 
-async function loadReaderBook() {
-  const { id, title, author } = getParams();
 
-  if (!id) {
-    readerBookTitle.textContent = "Книга не найдена";
-    readerBookAuthor.textContent = "AziBax Reader";
-    readerText.textContent = "Не передан идентификатор книги.";
-    readerStatus.textContent = "Ошибка";
-    return;
-  }
+@router.get("")
+def list_books(
+    q: Optional[str] = Query(default="classic literature"),
+    language: Optional[str] = Query(default=None),
+    limit: int = Query(default=18, ge=1, le=100),
+):
+    """
+    Пока не ломаем текущую выдачу.
+    Если у тебя уже был рабочий список книг, этот маршрут можно оставить как есть.
+    """
+    import requests
 
-  try {
-    readerStatus.textContent = "Загружаем книгу...";
-    readerBookTitle.textContent = title;
-    readerBookAuthor.textContent = author;
+    params = {"q": q, "limit": limit}
+    if language:
+        params["language"] = language
 
-    const readData = await apiFetch(`/books/read?book_id=${encodeURIComponent(id)}`);
+    response = requests.get("https://openlibrary.org/search.json", params=params, timeout=20)
+    response.raise_for_status()
+    data = response.json()
 
-    readerText.textContent = readData.text || "Текст книги пока не добавлен.";
-    readerStatus.textContent = "Книга открыта";
-  } catch (err) {
-    console.error(err);
-    readerBookTitle.textContent = title || "Ошибка загрузки";
-    readerBookAuthor.textContent = author || "AziBax Reader";
-    readerText.textContent = err.message || "Не удалось открыть книгу.";
-    readerStatus.textContent = "Ошибка";
-  }
-}
+    books = []
+    for doc in data.get("docs", []):
+        key = doc.get("key", "")
+        title = doc.get("title") or "Без названия"
+        author = doc["author_name"][0] if doc.get("author_name") else "Неизвестный автор"
+        language_value = doc["language"][0] if doc.get("language") else "unknown"
+        cover_id = doc.get("cover_i")
 
-applyFontSize();
-loadReaderBook();
+        books.append({
+            "id": key,
+            "title": title,
+            "author": author,
+            "genre": None,
+            "description": f"{title} — {author}",
+            "language": language_value,
+            "cover": f"https://covers.openlibrary.org/b/id/{cover_id}-L.jpg" if cover_id else None,
+            "openlibrary_url": f"https://openlibrary.org{key}" if key else None,
+        })
+
+    return books
+
+
+@router.get("/search")
+def search_books(
+    q: str = Query(..., min_length=1),
+    language: Optional[str] = Query(default=None),
+    limit: int = Query(default=18, ge=1, le=100),
+):
+    import requests
+
+    params = {"q": q, "limit": limit}
+    if language:
+        params["language"] = language
+
+    response = requests.get("https://openlibrary.org/search.json", params=params, timeout=20)
+    response.raise_for_status()
+    data = response.json()
+
+    books = []
+    for doc in data.get("docs", []):
+        key = doc.get("key", "")
+        title = doc.get("title") or "Без названия"
+        author = doc["author_name"][0] if doc.get("author_name") else "Неизвестный автор"
+        language_value = doc["language"][0] if doc.get("language") else "unknown"
+        cover_id = doc.get("cover_i")
+
+        books.append({
+            "id": key,
+            "title": title,
+            "author": author,
+            "genre": None,
+            "description": f"{title} — {author}",
+            "language": language_value,
+            "cover": f"https://covers.openlibrary.org/b/id/{cover_id}-L.jpg" if cover_id else None,
+            "openlibrary_url": f"https://openlibrary.org{key}" if key else None,
+        })
+
+    return books
+
+
+@router.get("/read")
+def read_book(book_id: str = Query(...)):
+    return {
+        "book_id": book_id,
+        "text": DEMO_TEXT
+    }
