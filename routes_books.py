@@ -1,55 +1,66 @@
-from fastapi import APIRouter
+const readerBookTitle = document.getElementById("readerBookTitle");
+const readerBookAuthor = document.getElementById("readerBookAuthor");
+const readerText = document.getElementById("readerText");
+const readerStatus = document.getElementById("readerStatus");
+const fontMinusBtn = document.getElementById("fontMinusBtn");
+const fontPlusBtn = document.getElementById("fontPlusBtn");
 
-router = APIRouter()
+let currentFontSize = Number(localStorage.getItem("azibax_reader_font") || 20);
 
-books = [
-    {
-        "id": 1,
-        "title": "Sherlock Holmes",
-        "author": "Arthur Conan Doyle",
-        "cover": "https://covers.openlibrary.org/b/id/8225261-L.jpg",
-        "description": "Classic detective stories."
-    },
-    {
-        "id": 2,
-        "title": "Meditations",
-        "author": "Marcus Aurelius",
-        "cover": "https://covers.openlibrary.org/b/id/8231996-L.jpg",
-        "description": "Stoic philosophy of Marcus Aurelius."
-    },
-    {
-        "id": 3,
-        "title": "A Doll’s House",
-        "author": "Henrik Ibsen",
-        "cover": "https://covers.openlibrary.org/b/id/8225631-L.jpg",
-        "description": "Famous drama play."
-    },
-    {
-        "id": 4,
-        "title": "The Interpretation of Dreams",
-        "author": "Sigmund Freud",
-        "cover": "https://covers.openlibrary.org/b/id/8235116-L.jpg",
-        "description": "Psychoanalysis classic."
-    }
-]
-@router.get("/{book_id}")
-def get_book(book_id: str):
-    return {
-        "id": book_id,
-        "title": f"Книга #{book_id}",
-        "author": "AziBax Library",
-        "description": "Демонстрационная книга"
-    }
-@router.get("/{book_id}/read")
-def read_book(book_id: str):
-    sample_texts = {
-        "1": "Глава 1\n\nЭто первая книга в библиотеке AziBax. Здесь будет настоящий текст книги.",
-        "2": "Глава 1\n\nВторая книга открыта внутри сайта. Пользователь остаётся в AziBax.",
-    }
+function getParams() {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    id: params.get("id") || "",
+    title: params.get("title") || "Без названия",
+    author: params.get("author") || "Неизвестный автор",
+  };
+}
 
-    text = sample_texts.get(
-        str(book_id),
-        "Это демонстрационный режим reader. Следующим этапом сюда подключаются реальные тексты книг из файлов .txt или .epub."
-    )
+function applyFontSize() {
+  if (readerText) {
+    readerText.style.fontSize = `${currentFontSize}px`;
+  }
+  localStorage.setItem("azibax_reader_font", String(currentFontSize));
+}
 
-    return {"book_id": book_id, "text": text}
+fontMinusBtn?.addEventListener("click", () => {
+  currentFontSize = Math.max(16, currentFontSize - 1);
+  applyFontSize();
+});
+
+fontPlusBtn?.addEventListener("click", () => {
+  currentFontSize = Math.min(30, currentFontSize + 1);
+  applyFontSize();
+});
+
+async function loadReaderBook() {
+  const { id, title, author } = getParams();
+
+  if (!id) {
+    readerBookTitle.textContent = "Книга не найдена";
+    readerBookAuthor.textContent = "AziBax Reader";
+    readerText.textContent = "Не передан идентификатор книги.";
+    readerStatus.textContent = "Ошибка";
+    return;
+  }
+
+  try {
+    readerStatus.textContent = "Загружаем книгу...";
+    readerBookTitle.textContent = title;
+    readerBookAuthor.textContent = author;
+
+    const readData = await apiFetch(`/books/read?book_id=${encodeURIComponent(id)}`);
+
+    readerText.textContent = readData.text || "Текст книги пока не добавлен.";
+    readerStatus.textContent = "Книга открыта";
+  } catch (err) {
+    console.error(err);
+    readerBookTitle.textContent = title || "Ошибка загрузки";
+    readerBookAuthor.textContent = author || "AziBax Reader";
+    readerText.textContent = err.message || "Не удалось открыть книгу.";
+    readerStatus.textContent = "Ошибка";
+  }
+}
+
+applyFontSize();
+loadReaderBook();
