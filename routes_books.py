@@ -32,10 +32,14 @@ books = [
         "description": "Psychoanalysis classic."
     }
 ]
-
-@router.get("/books")
-def get_books():
-    return books
+@router.get("/{book_id}")
+def get_book(book_id: str):
+    return {
+        "id": book_id,
+        "title": f"Книга #{book_id}",
+        "author": "AziBax Library",
+        "description": "Демонстрационная книга"
+    }
 @router.get("/{book_id}/read")
 def read_book(book_id: str):
     sample_texts = {
