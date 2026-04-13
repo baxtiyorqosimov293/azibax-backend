@@ -1,106 +1,144 @@
+from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 router = APIRouter(prefix="/books", tags=["books"])
 
-# Пока оставляем демо-тексты.
-# Позже сюда подключим реальные txt/epub файлы.
-DEMO_TEXT = """
-Глава 1
+BASE_DIR = Path(__file__).resolve().parent
+LIBRARY_DIR = BASE_DIR / "library" / "books"
 
-Это первая версия встроенного reader для AziBax.
+BOOKS = [
+    {
+        "id": "gosudar",
+        "title": "Государь",
+        "author": "Никколо Макиавелли",
+        "description": "Классический трактат о власти, управлении и политическом искусстве.",
+        "language": "Русский",
+        "genre": "История",
+        "cover": None,
+        "file_name": "gosudar.txt",
+    },
+    {
+        "id": "sherlock",
+        "title": "Шерлок Холмс",
+        "author": "Артур Конан Дойл",
+        "description": "Знаменитые расследования, наблюдательность и искусство дедукции.",
+        "language": "Русский",
+        "genre": "Детектив",
+        "cover": None,
+        "file_name": "sherlock.txt",
+    },
+    {
+        "id": "razmyshleniya",
+        "title": "Размышления",
+        "author": "Марк Аврелий",
+        "description": "Записи о внутренней дисциплине, спокойствии и ясности ума.",
+        "language": "Русский",
+        "genre": "Саморазвитие",
+        "cover": None,
+        "file_name": "razmyshleniya.txt",
+    },
+]
 
-Теперь книга открывается прямо внутри сайта,
-а читатель не уходит на другие платформы.
 
-Следующим этапом мы подключим реальные книги
-из твоей собственной библиотеки.
-""".strip()
+def _public_book(book: dict) -> dict:
+    return {
+        "id": book["id"],
+        "title": book["title"],
+        "author": book["author"],
+        "description": book["description"],
+        "language": book["language"],
+        "genre": book["genre"],
+        "cover": book["cover"],
+    }
+
+
+def _filter_books(
+    q: Optional[str] = None,
+    language: Optional[str] = None,
+    genre: Optional[str] = None,
+) -> list[dict]:
+    results = BOOKS
+
+    if language:
+        lang_lower = language.strip().lower()
+        results = [
+            book for book in results
+            if (book.get("language") or "").strip().lower() == lang_lower
+        ]
+
+    if genre:
+        genre_lower = genre.strip().lower()
+        results = [
+            book for book in results
+            if (book.get("genre") or "").strip().lower() == genre_lower
+        ]
+
+    if q:
+        q_lower = q.strip().lower()
+        results = [
+            book for book in results
+            if q_lower in (book.get("title") or "").lower()
+            or q_lower in (book.get("author") or "").lower()
+            or q_lower in (book.get("description") or "").lower()
+        ]
+
+    return results
 
 
 @router.get("")
 def list_books(
-    q: Optional[str] = Query(default="classic literature"),
+    q: Optional[str] = Query(default=None),
     language: Optional[str] = Query(default=None),
+    genre: Optional[str] = Query(default=None),
     limit: int = Query(default=18, ge=1, le=100),
 ):
-    """
-    Пока не ломаем текущую выдачу.
-    Если у тебя уже был рабочий список книг, этот маршрут можно оставить как есть.
-    """
-    import requests
-
-    params = {"q": q, "limit": limit}
-    if language:
-        params["language"] = language
-
-    response = requests.get("https://openlibrary.org/search.json", params=params, timeout=20)
-    response.raise_for_status()
-    data = response.json()
-
-    books = []
-    for doc in data.get("docs", []):
-        key = doc.get("key", "")
-        title = doc.get("title") or "Без названия"
-        author = doc["author_name"][0] if doc.get("author_name") else "Неизвестный автор"
-        language_value = doc["language"][0] if doc.get("language") else "unknown"
-        cover_id = doc.get("cover_i")
-
-        books.append({
-            "id": key,
-            "title": title,
-            "author": author,
-            "genre": None,
-            "description": f"{title} — {author}",
-            "language": language_value,
-            "cover": f"https://covers.openlibrary.org/b/id/{cover_id}-L.jpg" if cover_id else None,
-            "openlibrary_url": f"https://openlibrary.org{key}" if key else None,
-        })
-
-    return books
+    books = _filter_books(q=q, language=language, genre=genre)
+    return [_public_book(book) for book in books[:limit]]
 
 
 @router.get("/search")
 def search_books(
     q: str = Query(..., min_length=1),
     language: Optional[str] = Query(default=None),
+    genre: Optional[str] = Query(default=None),
     limit: int = Query(default=18, ge=1, le=100),
 ):
-    import requests
-
-    params = {"q": q, "limit": limit}
-    if language:
-        params["language"] = language
-
-    response = requests.get("https://openlibrary.org/search.json", params=params, timeout=20)
-    response.raise_for_status()
-    data = response.json()
-
-    books = []
-    for doc in data.get("docs", []):
-        key = doc.get("key", "")
-        title = doc.get("title") or "Без названия"
-        author = doc["author_name"][0] if doc.get("author_name") else "Неизвестный автор"
-        language_value = doc["language"][0] if doc.get("language") else "unknown"
-        cover_id = doc.get("cover_i")
-
-        books.append({
-            "id": key,
-            "title": title,
-            "author": author,
-            "genre": None,
-            "description": f"{title} — {author}",
-            "language": language_value,
-            "cover": f"https://covers.openlibrary.org/b/id/{cover_id}-L.jpg" if cover_id else None,
-            "openlibrary_url": f"https://openlibrary.org{key}" if key else None,
-        })
-
-    return books
+    books = _filter_books(q=q, language=language, genre=genre)
+    return [_public_book(book) for book in books[:limit]]
 
 
 @router.get("/read")
 def read_book(book_id: str = Query(...)):
+    book = next((b for b in BOOKS if b["id"] == book_id), None)
+
+    if not book:
+      raise HTTPException(status_code=404, detail="Книга не найдена")
+
+    file_name = book.get("file_name")
+    if not file_name:
+      raise HTTPException(status_code=404, detail="У книги нет файла")
+
+    file_path = LIBRARY_DIR / file_name
+
+    if not file_path.exists():
+      raise HTTPException(status_code=404, detail="Файл книги не найден")
+
+    text = file_path.read_text(encoding="utf-8")
+
     return {
-        "book_id": book_id,
-        "text": DEMO_TEXT
+        "book_id": book["id"],
+        "title": book["title"],
+        "author": book["author"],
+        "text": text
     }
+
+
+@router.get("/{book_id}")
+def get_book(book_id: str):
+    book = next((b for b in BOOKS if b["id"] == book_id), None)
+
+    if not book:
+        raise HTTPException(status_code=404, detail="Книга не найдена")
+
+    return _public_book(book)
