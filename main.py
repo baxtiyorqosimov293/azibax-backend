@@ -1,17 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+
 from .database import Base, engine
 from .config import LIBRARY_PATH
 from .routes_auth import router as auth_router
@@ -26,13 +16,30 @@ app = FastAPI(
     description="MVP backend for a legal book platform.",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://azibax-frontend.onrender.com",
+        "http://localhost:3000",
+        "http://localhost:5500",
+        "*"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(auth_router)
 app.include_router(books_router)
 app.include_router(favorites_router)
 
 @app.get("/")
 def root():
-    return {"name": "AziBax Kitob API", "status": "ok", "docs": "/docs"}
+    return {
+        "name": "AziBax Kitob API",
+        "status": "ok",
+        "docs": "/docs"
+    }
 
 if LIBRARY_PATH.exists():
     app.mount("/library", StaticFiles(directory=str(LIBRARY_PATH)), name="library")
