@@ -36,3 +36,16 @@ books = [
 @router.get("/books")
 def get_books():
     return books
+@router.get("/{book_id}/read")
+def read_book(book_id: str):
+    sample_texts = {
+        "1": "Глава 1\n\nЭто первая книга в библиотеке AziBax. Здесь будет настоящий текст книги.",
+        "2": "Глава 1\n\nВторая книга открыта внутри сайта. Пользователь остаётся в AziBax.",
+    }
+
+    text = sample_texts.get(
+        str(book_id),
+        "Это демонстрационный режим reader. Следующим этапом сюда подключаются реальные тексты книг из файлов .txt или .epub."
+    )
+
+    return {"book_id": book_id, "text": text}
